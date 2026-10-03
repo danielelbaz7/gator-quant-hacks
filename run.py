@@ -166,7 +166,7 @@ def main():
             if mk not in models:
                 models[mk] = predict_outcome(
                     fit_model(matches, events, kstart, *mk, val=False)[0], is_c)
-            params = {**bt_params(a), "threshold": g["threshold"]}
+            params = {**bt_params(a), **{k: v for k, v in g.items() if k in config.BACKTEST}}
             m1 = metrics(run_backtest(is_c, models[mk], **params))
             m2 = metrics(run_backtest(is_c, models[mk], **{**params, "cost_mult": params["cost_mult"] * 2}))
             row = dict(time=datetime.now().isoformat(timespec="seconds"), sample="IS", **g,
@@ -175,7 +175,7 @@ def main():
             rows.append(row)
             log_trial(row)
         out = pd.DataFrame(rows)
-        print(out[keys + ["net_trades", "net_pnl_per_trade", "net_t_stat", "x2_pnl_total"]].to_string())
+        print(out[keys + ["net_trades", "net_pnl_total", "net_pnl_per_trade", "net_t_stat", "x2_pnl_total"]].to_string())
         print("\nPick a configuration for a reason you can defend (stable across neighbours), "
               "not just the top row.")
 

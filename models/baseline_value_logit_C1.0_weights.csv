@@ -1,0 +1,14 @@
+,H,D,A
+goal_diff,0.257,-0.041,-0.216
+gd_x_elapsed,0.854,0.03,-0.883
+gd_over_sqrt_left,0.798,-0.019,-0.78
+level_x_elapsed,-0.109,0.217,-0.108
+elapsed,-0.082,0.145,-0.063
+red_diff,0.116,-0.005,-0.111
+red_diff_x_left,0.059,-0.017,-0.042
+pre_logit_ha,0.479,-0.011,-0.468
+pre_logit_x_left,0.071,0.008,-0.079
+pre_logit_draw,-0.047,0.095,-0.048
+value_logratio,-0.056,0.065,-0.009
+value_x_left,0.042,-0.026,-0.016
+intercept,0.355,0.052,-0.406

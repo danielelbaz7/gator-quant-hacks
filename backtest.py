@@ -6,6 +6,9 @@ Trading rule (per Kalshi outcome market, e.g. "Arsenal wins"):
   buy NO   if bid - p - cost(bid) > threshold      (market too expensive; same as selling YES)
 
 Fill at the NEXT bar's quotes (exec_next_bar), hold to settlement.
+Cooldown: no trade within `cooldown` minutes after any market of the match moved its mid by
+more than `jump` in one bar. A live trader sees this move; it usually means an event our
+(lagged) data feed hasn't delivered yet.
 YES pays $1 if the outcome happens. One contract per trade, so P&L is in dollars per contract.
 """
 import numpy as np
@@ -17,8 +20,23 @@ def kalshi_fee(price, rate):
     return rate * price * (1 - price)
 
 
+def last_jump_age(c, jump):
+    """Minutes since any market of the same match last moved its mid by more than `jump` in
+    one quoted bar (up to and including bar t, so it is known at decision time). NaN = never."""
+    mid = (c.bid + c.ask) / 2
+    moved = (mid.groupby(c.ticker).diff().abs() > jump).to_numpy()
+    t = pd.to_datetime(c.t, utc=True)
+    jumps = pd.DataFrame({"match_id": c.match_id[moved].to_numpy(), "tj": t[moved].to_numpy()})
+    q = pd.DataFrame({"match_id": c.match_id.to_numpy(), "t": t.to_numpy(), "i": np.arange(len(c))})
+    out = pd.merge_asof(q.sort_values("t"), jumps.sort_values("tj"), left_on="t", right_on="tj",
+                        by="match_id", direction="backward")
+    age = (out.t - out.tj).dt.total_seconds() / 60
+    return pd.Series(age.to_numpy(), index=out.i.to_numpy()).sort_index().to_numpy()
+
+
 def run_backtest(c, prob, threshold, max_spread, min_minute, max_minute, skip_halftime,
-                 fee_rate, slippage, cost_mult, exec_next_bar, one_per, block_prematch=False):
+                 fee_rate, slippage, cost_mult, exec_next_bar, one_per, cooldown=0, jump=0.07,
+                 block_prematch=False):
     c = c.assign(p=prob).sort_values(["ticker", "t"]).reset_index(drop=True)
     if exec_next_bar:
         g = c.groupby("ticker")
@@ -34,6 +52,9 @@ def run_backtest(c, prob, threshold, max_spread, min_minute, max_minute, skip_ha
           & (c.phase != "post"))
     if skip_halftime:
         ok &= c.phase != "HT"
+    if cooldown > 0:   # market just jumped (likely a goal/card our feed hasn't delivered yet): stand aside
+        age = last_jump_age(c, jump)
+        ok &= ~(age <= cooldown)
 
     cost = lambda px: cost_mult * (kalshi_fee(px, fee_rate) + slippage)
     edge_buy = c.p - c.ask - cost(c.ask)

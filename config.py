@@ -69,11 +69,15 @@ BACKTEST = dict(
     cost_mult=1.0,       # set 2.0 for the "double the costs" check (done automatically in reports)
     exec_next_bar=True,  # signal on bar t, fill at bar t+1 quotes
     one_per="ticker",    # "ticker" = max one trade per outcome market, "match" = one per match
+    cooldown=0,          # minutes to stand aside after a sharp price jump in the match (0 = off)
+    jump=0.07,           # mid move in one bar (dollars) that counts as a jump; goals move ~0.15-0.20
 )
 
+# keys that are also BACKTEST keys (threshold, cooldown, ...) override the trading rule per combo
 GRID = dict(
-    feature_set=["score_only", "baseline", "baseline_value"],
+    feature_set=["baseline"],              # baseline_value: no validation gain (0.7540 vs 0.7539)
     kind=["logit"],
-    C=[0.1, 1.0],
+    C=[1.0],
     threshold=[0.03, 0.05, 0.08],
+    cooldown=[0, 3, 5],
 )
