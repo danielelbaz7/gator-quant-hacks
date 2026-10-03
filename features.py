@@ -136,6 +136,23 @@ def f_xg_diff_x_left(df):
     return f_xg_diff(df) * _left(df)
 
 
+@feature("xg_recent_diff")
+def f_xg_recent_diff(df):
+    """Home minus away xG in the last RECENT_XG_WINDOW match minutes (current pressure)."""
+    return col(df, "home_xg_recent") - col(df, "away_xg_recent")
+
+
+@feature("xg_recent_x_left")
+def f_xg_recent_x_left(df):
+    return f_xg_recent_diff(df) * _left(df)
+
+
+@feature("comeback_pressure")
+def f_comeback_pressure(df):
+    """Recent xG of the trailing team minus the leader's (0 when level): > 0 = losing side is pushing."""
+    return -np.sign(_gd(df)) * f_xg_recent_diff(df)
+
+
 @feature("pre_logit_ha")
 def f_pre_logit_ha(df):
     """Pre-match strength gap: log(P(home) / P(away))."""
@@ -152,6 +169,48 @@ def f_pre_logit_x_left(df):
 def f_pre_logit_draw(df):
     p = col(df, "p_draw")
     return np.log(p / (1 - p))
+
+
+# Expected total goals from the Over/Under 2.5 market: solve P(Poisson(lam) >= 3) = p_over25.
+_LAM = np.linspace(0.3, 7.0, 2000)
+_POVER = 1 - np.exp(-_LAM) * (1 + _LAM + _LAM ** 2 / 2)
+
+
+def _lambda(df):
+    p = col(df, "p_over25")
+    return pd.Series(np.interp(p, _POVER, _LAM), index=df.index).where(p.notna())
+
+
+def _egl(df):
+    """Expected goals still to come = pre-match expected total x fraction of match left."""
+    return _lambda(df) * _left(df)
+
+
+@feature("pre_total_goals")
+def f_pre_total_goals(df):
+    return _lambda(df)
+
+
+@feature("exp_goals_left")
+def f_exp_goals_left(df):
+    return _egl(df)
+
+
+@feature("gd_over_sqrt_egl")
+def f_gd_over_sqrt_egl(df):
+    """Lead relative to the goal 'noise' still expected (Poisson sd ~ sqrt(expected goals left))."""
+    return _gd(df) / np.sqrt(_egl(df) + 0.05)
+
+
+@feature("abs_gd_over_sqrt_egl")
+def f_abs_gd_over_sqrt_egl(df):
+    return _gd(df).abs() / np.sqrt(_egl(df) + 0.05)
+
+
+@feature("level_x_egl")
+def f_level_x_egl(df):
+    """Level score with many goals still expected -> draw less safe."""
+    return (_gd(df) == 0).astype(float) * _egl(df)
 
 
 @feature("value_logratio")

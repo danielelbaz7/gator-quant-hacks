@@ -19,7 +19,7 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-from config import PATHS, TIME, SPLIT
+from config import PATHS, TIME, SPLIT, RECENT_XG_WINDOW
 
 LEAGUE_TM = {"GB1": "EPL", "ES1": "LALIGA", "L1": "BUNDESLIGA", "IT1": "SERIEA", "FR1": "LIGUE1"}
 LEAGUE_FD = {"ENG-Premier League": "EPL", "ESP-La Liga": "LALIGA", "GER-Bundesliga": "BUNDESLIGA",
@@ -236,6 +236,9 @@ def _h2h(m, last_n=5):
 # --------------------------------------------------------------------------- Football-Data odds (ASSUMED schema)
 ODDS_CLOSING = [("PSCH", "PSCD", "PSCA"), ("AvgCH", "AvgCD", "AvgCA"), ("B365CH", "B365CD", "B365CA")]
 ODDS_OPENING = [("PSH", "PSD", "PSA"), ("AvgH", "AvgD", "AvgA"), ("B365H", "B365D", "B365A")]
+# Over/Under 2.5 goals: (over, under). BbAv = Betbrain average, the only O/U source in older seasons.
+OU_CLOSING = [("PC>2.5", "PC<2.5"), ("AvgC>2.5", "AvgC<2.5"), ("B365C>2.5", "B365C<2.5")]
+OU_OPENING = [("P>2.5", "P<2.5"), ("Avg>2.5", "Avg<2.5"), ("B365>2.5", "B365<2.5"), ("BbAv>2.5", "BbAv<2.5")]
 
 
 def load_football_data(path=None, which="closing"):
@@ -259,6 +262,13 @@ def load_football_data(path=None, which="closing"):
         "date": pd.to_datetime(df[need["date"]]),
         "home": df[need["home_team"]], "away": df[need["away_team"]],
     }).join(P)
+    pairs = [t for t in (OU_CLOSING + OU_OPENING if which == "closing" else OU_OPENING) if all(c in df for c in t)]
+    out["p_over25"] = np.nan
+    for o, u in pairs:                               # first available bookmaker per row, vig removed
+        io, iu = 1 / df[o].astype(float), 1 / df[u].astype(float)
+        p = io / (io + iu)
+        fill = out.p_over25.isna() & p.notna()
+        out.loc[fill, "p_over25"] = p[fill]
     tcol = cols.get("time")
     if tcol:   # football-data times are believed to be UK local time; verify on a few matches
         local = pd.to_datetime(out.date.dt.strftime("%Y-%m-%d") + " " + df[tcol].astype(str),
@@ -466,7 +476,7 @@ def build_canonical():
     link = match_games(fd, m.rename(columns={"match_id": "key"})[["key", "league", "date", "home", "away"]])
     fd["match_id"] = fd.key.map(lambda k: link.get(k, (None,))[0])
     print(f"  odds matched for {fd.match_id.notna().sum()}/{len(fd)} football-data rows")
-    keep = ["match_id", "p_home", "p_draw", "p_away"] + (["kickoff_utc"] if "kickoff_utc" in fd else [])
+    keep = ["match_id", "p_home", "p_draw", "p_away", "p_over25"] + (["kickoff_utc"] if "kickoff_utc" in fd else [])
     m = m.merge(fd.dropna(subset=["match_id"])[keep].drop_duplicates("match_id"), on="match_id", how="left")
 
     xg = load_xg_shots()
@@ -588,8 +598,16 @@ def state_at(idx, match_ids, cutoffs):
     return pd.DataFrame(out)
 
 
-PREMATCH_COLS = ["p_home", "p_draw", "p_away", "home_value", "away_value", "h2h_gd",
+PREMATCH_COLS = ["p_home", "p_draw", "p_away", "p_over25", "home_value", "away_value", "h2h_gd",
                  "home_late_for", "home_late_against", "away_late_for", "away_late_against"]
+
+
+def _add_recent_xg(st, idx, match_ids, window_cutoffs):
+    """home/away_xg_recent = cumulative xG now minus cumulative xG at the window start."""
+    old = state_at(idx, match_ids, window_cutoffs)
+    for side in ("home", "away"):
+        st[f"{side}_xg_recent"] = st[f"{side}_xg"] - old[f"{side}_xg"].to_numpy()
+    return st
 
 
 def training_snapshots(matches, events, before, minutes):
@@ -598,8 +616,9 @@ def training_snapshots(matches, events, before, minutes):
     m = matches[pd.to_datetime(matches.date) < pd.Timestamp(before)]
     rep = m.loc[m.index.repeat(len(minutes))].reset_index(drop=True)
     rep["minute"] = np.tile(minutes, len(m)).astype(float)
-    st = state_at(_index_events(events[events.match_id.isin(m.match_id)]),
-                  rep.match_id, rep.minute - 0.5)
+    idx = _index_events(events[events.match_id.isin(m.match_id)])
+    st = state_at(idx, rep.match_id, rep.minute - 0.5)
+    st = _add_recent_xg(st, idx, rep.match_id, rep.minute - 0.5 - RECENT_XG_WINDOW)
     cols = ["match_id", "league", "date", "minute", "result"] + [c for c in PREMATCH_COLS if c in rep]
     return pd.concat([rep[cols], st], axis=1)
 
@@ -642,8 +661,9 @@ def candle_snapshots(candles, matches, events, live_events=None):
     c["minute"], c["phase"], c["clock"] = clock_to_match(c.t, c.kickoff, *(c.get(x) for x in
                                                          ("ht_start", "h2_start", "ft_time")))
     cutoff = np.where(c.phase == "pre", -1.0, c.minute - TIME["event_lag"])
-    st = state_at(_index_events(events[events.match_id.isin(c.match_id.unique())]),
-                  c.match_id, cutoff)
+    idx = _index_events(events[events.match_id.isin(c.match_id.unique())])
+    st = state_at(idx, c.match_id, cutoff)
+    st = _add_recent_xg(st, idx, c.match_id, cutoff - RECENT_XG_WINDOW)
     if live_events is not None and len(live_events):
         epoch = pd.Timestamp("1970-01-01", tz="UTC")                                  # unit-safe epoch minutes
         ep = lambda x: (pd.to_datetime(x, utc=True) - epoch).dt.total_seconds().to_numpy() / 60
@@ -651,7 +671,14 @@ def candle_snapshots(candles, matches, events, live_events=None):
         if "xg" not in live:
             live["xg"] = np.nan
         use = c.match_id.isin(set(live.match_id)).to_numpy()
-        st_live = state_at(_index_events(live), c.match_id, ep(c.t) - TIME["event_lag"])
+        idx_live = _index_events(live)
+        st_live = state_at(idx_live, c.match_id, ep(c.t) - TIME["event_lag"])
+        # recent window measured in match minutes (halftime break excluded), converted to real time
+        wm = np.maximum(c.minute.to_numpy() - TIME["event_lag"] - RECENT_XG_WINDOW, 0)
+        h2 = ep(c.h2_start) if "h2_start" in c else np.full(len(c), np.nan)
+        h2 = np.where(np.isnan(h2), ep(c.kickoff) + TIME["first_half_clock"] + TIME["halftime_break"], h2)
+        w_start = np.where(wm <= 45, ep(c.kickoff) + wm, h2 + (wm - 45))
+        st_live = _add_recent_xg(st_live, idx_live, c.match_id, np.where(c.phase == "pre", -np.inf, w_start))
         st.loc[use, :] = st_live.loc[use, :].to_numpy()
         c["state_src"] = np.where(use, "espn", "tm")
     return pd.concat([c, st], axis=1)

@@ -35,6 +35,7 @@ SPLIT = dict(
 ODDS = "closing"             # or "opening"
 
 TRAIN_MINUTES = list(range(0, 91, 5))   # snapshot minutes per training match
+RECENT_XG_WINDOW = 15                    # match minutes for "recent pressure" xG features
 
 # --- feature combinations: names come from features.py ---
 FEATURE_SETS = {
@@ -52,11 +53,22 @@ FEATURE_SETS = {
                     "xg_diff", "xg_diff_x_left"],
     # baseline_xg + |gd| / level-score shape: fixes late level-game draw underprediction
     # (validation logloss 0.7532 -> 0.7507, paired t = -7.4). late_tilt_x_elapsed tested: no gain (t = -0.4).
+    # yellow_diff + yellow_diff_x_left tested on top: slightly worse (0.7507 -> 0.7512, t = +1.7), not used.
+    # recent pressure (xg_recent_diff, xg_recent_x_left, comeback_pressure; last 15 min) tested on top:
+    # no gain (0.7507 -> 0.7507, t = -0.6); the pressure effect is already captured by cumulative xG + odds.
     "xg_draw": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
                 "elapsed", "red_diff", "red_diff_x_left",
                 "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
                 "xg_diff", "xg_diff_x_left",
                 "level_over_sqrt_left", "abs_gd", "abs_gd_over_sqrt_left"],
+    # xg_draw + expected goals from the Over/Under 2.5 market (Poisson lambda): leads judged against
+    # goals still expected. Validation logloss 0.7507 -> 0.7493 (paired t = -2.8).
+    "xg_draw_ou": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
+                   "elapsed", "red_diff", "red_diff_x_left",
+                   "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
+                   "xg_diff", "xg_diff_x_left",
+                   "level_over_sqrt_left", "abs_gd", "abs_gd_over_sqrt_left",
+                   "pre_total_goals", "exp_goals_left", "gd_over_sqrt_egl", "abs_gd_over_sqrt_egl", "level_x_egl"],
     "full": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
              "elapsed", "total_goals", "red_diff", "red_diff_x_left",
              "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
