@@ -103,6 +103,10 @@ BACKTEST = dict(
     one_per="ticker",    # "ticker" = max one trade per outcome market, "match" = one per match
     cooldown=3,          # minutes to stand aside after a sharp price jump in the match (0 = off)
     jump=0.07,           # mid move in one bar (dollars) that counts as a jump; goals move ~0.15-0.20
+    sizing="flat",       # "flat" = 1 contract; "edge" = edge/threshold contracts; "kelly" = fractional Kelly
+    size_cap=1.0,        # max contracts per trade (edge / kelly sizing)
+    bankroll=100.0,      # kelly sizing: bankroll in dollars
+    kelly_frac=0.25,     # kelly sizing: fraction of full Kelly
 )
 
 # keys that are also BACKTEST keys (threshold, cooldown, ...) override the trading rule per combo

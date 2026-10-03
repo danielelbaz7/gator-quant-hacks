@@ -36,7 +36,7 @@ def last_jump_age(c, jump):
 
 def run_backtest(c, prob, threshold, max_spread, min_minute, max_minute, skip_halftime,
                  fee_rate, slippage, cost_mult, exec_next_bar, one_per, cooldown=0, jump=0.07,
-                 block_prematch=False):
+                 sizing="flat", size_cap=1.0, bankroll=100.0, kelly_frac=0.25, block_prematch=False):
     c = c.assign(p=prob).sort_values(["ticker", "t"]).reset_index(drop=True)
     if exec_next_bar:
         g = c.groupby("ticker")
@@ -68,12 +68,22 @@ def run_backtest(c, prob, threshold, max_spread, min_minute, max_minute, skip_ha
     px = np.where(sig.side == 1, sig.xask, sig.xbid)
     tr = sig.assign(fill=px).dropna(subset=["fill"]).copy()
     buy = tr.side == 1
-    tr["capital"] = np.where(buy, tr.fill, 1 - tr.fill)
-    tr["costs"] = cost(tr.fill)
-    tr["pnl"] = np.where(buy, tr.won - tr.fill, tr.fill - tr.won) - tr.costs
     tr["edge_at_signal"] = np.where(buy, edge_buy[tr.index], edge_sell[tr.index])
+    # position size, decided from signal-bar information only (edge, model p, quotes at bar t)
+    if sizing == "edge":            # 1 contract at the threshold, more for bigger edges
+        tr["contracts"] = np.clip(tr.edge_at_signal / threshold, 1.0, size_cap)
+    elif sizing == "kelly":         # fractional Kelly stake on a fixed bankroll, in contracts
+        q = np.where(buy, tr.ask, 1 - tr.bid)                     # price of the side we buy
+        pw = np.where(buy, tr.p, 1 - tr.p)                        # model prob that side wins
+        f = np.clip((pw - q) / (1 - q), 0, 1)
+        tr["contracts"] = np.clip(kelly_frac * f * bankroll / q, 1.0, size_cap)
+    else:
+        tr["contracts"] = 1.0
+    tr["capital"] = np.where(buy, tr.fill, 1 - tr.fill) * tr.contracts
+    tr["costs"] = cost(tr.fill) * tr.contracts
+    tr["pnl"] = np.where(buy, tr.won - tr.fill, tr.fill - tr.won) * tr.contracts - tr.costs
     return tr[["match_id", "ticker", "league", "outcome", "t", "phase", "minute", "side",
-               "p", "bid", "ask", "fill", "won", "capital", "costs", "pnl", "edge_at_signal"]]
+               "p", "bid", "ask", "fill", "won", "contracts", "capital", "costs", "pnl", "edge_at_signal"]]
 
 
 def metrics(tr, label=""):
@@ -86,6 +96,7 @@ def metrics(tr, label=""):
     return dict(
         label=label,
         trades=len(tr),
+        contracts=round(tr.contracts.sum(), 1) if "contracts" in tr else len(tr),
         matches=tr.match_id.nunique(),
         hit_rate=round((tr.pnl > 0).mean(), 3),
         pnl_total=round(tr.pnl.sum(), 2),
