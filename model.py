@@ -34,9 +34,12 @@ class WinProbModel:
             print(f"  [model] dropped {dropped:.0%} of training rows with missing features "
                   f"(check which inputs are missing for this feature set)")
         X, y = X[ok], snaps.loc[ok, "result"].map({c: i for i, c in enumerate(CLASSES)})
+        order = np.lexsort([snaps.loc[ok, "minute"].to_numpy(), snaps.loc[ok, "match_id"].astype(str).to_numpy()]) \
+            if {"match_id", "minute"} <= set(snaps.columns) else np.arange(len(X))
+        X, y = X.iloc[order], y.iloc[order]        # fixed row order: fit doesn't depend on table order
         if self.kind == "logit":
             self.pipe = make_pipeline(StandardScaler(),
-                                      LogisticRegression(C=self.C, max_iter=3000))
+                                      LogisticRegression(C=self.C, max_iter=10000, tol=1e-8))
             self.pipe.fit(X, y)
         elif self.kind == "ols":
             self.pipe = make_pipeline(StandardScaler(), LinearRegression())

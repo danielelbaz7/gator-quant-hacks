@@ -47,7 +47,12 @@ def shots(g):
 def main(workers=8):
     m = pd.read_parquet(f"{PATHS['canonical']}/matches.parquet")
     m = m[pd.to_datetime(m.date) >= START]
-    items = sorted({(lg, d.strftime("%Y%m%d")) for lg, d in zip(m.league, pd.to_datetime(m.date))})
+    items = {(lg, d.strftime("%Y%m%d")) for lg, d in zip(m.league, pd.to_datetime(m.date))}
+    if os.path.exists("espn_games.parquet"):         # Kalshi-date games, incl. ones Transfermarkt lacks
+        eg = pd.read_parquet("espn_games.parquet")
+        items |= {(lg, d.strftime("%Y%m%d")) for lg, d in
+                  zip(eg.league, pd.to_datetime(eg.scheduled, utc=True).dt.tz_convert(None))}
+    items = sorted(i for i in items if i[0] in ESPN_LEAGUE)
     print(f"ESPN scoreboards: {len(items)} league-days since {START}")
     with ThreadPoolExecutor(workers) as ex:
         games = pd.DataFrame([r for rows in ex.map(scoreboard, items) for r in rows]).drop_duplicates("espn_id")

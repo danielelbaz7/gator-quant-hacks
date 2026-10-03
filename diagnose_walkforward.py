@@ -14,7 +14,7 @@ import pandas as pd
 import config
 from data import training_snapshots
 from model import WinProbModel
-from run import kalshi_frame, load, predict_outcome
+from run import kalshi_frame, load, predict_outcome, train_matches
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--set", default=config.MODEL["feature_set"])
@@ -24,7 +24,7 @@ matches, events, candles, kstart, oos_start = load(config.PATHS["canonical"])
 c = kalshi_frame(candles, matches, events, config.PATHS["canonical"])
 c = c[(c.date < oos_start)].copy()
 feats = config.FEATURE_SETS[a.set]
-snaps = training_snapshots(matches, events, oos_start, config.TRAIN_MINUTES)
+snaps = training_snapshots(train_matches(matches), events, oos_start, config.TRAIN_MINUTES)
 c["month"] = pd.to_datetime(c.date).dt.to_period("M").dt.to_timestamp()
 ll = lambda p, y: -(y * np.log(np.clip(p, 1e-4, 1 - 1e-4)) + (1 - y) * np.log(np.clip(1 - p, 1e-4, 1 - 1e-4)))
 

@@ -8,6 +8,7 @@ PATHS = dict(
     canonical="data/canonical",                    # output of `python run.py build`
     tm_duckdb="transfermarkt-datasets.duckdb",
     fd_games="football_data_games.parquet",        # soccerdata MatchHistory output
+    fd_extra="football_data_extra.parquet",        # extra leagues, direct football-data.co.uk CSVs
     kalshi_markets="big5_markets.parquet",
     kalshi_candles="big5_candles.parquet",
     xg_shots="xg_shots.parquet",                   # optional, see data.load_xg_shots
@@ -24,9 +25,21 @@ TIME = dict(
     kickoff_from_close=122,  # fallback only: kickoff ~= market close_time minus this many minutes
 )
 
+# Big-5 = the leagues the strategy was built and tuned on. Extra leagues are a fresh holdout only.
+LEAGUES_MAIN = ["EPL", "LALIGA", "BUNDESLIGA", "SERIEA", "LIGUE1"]
+# Turkey, Belgium, Greece, Scotland were dropped before any results: ESPN has no shot commentary or
+# real 2nd-half start times for them, so the locked model's inputs (live xG, real clock) don't exist.
+LEAGUES_EXTRA = ["PORTUGAL", "EREDIVISIE"]
+TRAIN_LEAGUES = LEAGUES_MAIN          # model history (locked): big-5 Transfermarkt matches only
+
 SPLIT = dict(
     val_start="2024-07-01",  # training matches before this, validation from here to first Kalshi match
     oos_frac=0.20,           # most recent 20% of Kalshi matches are out-of-sample (track rule)
+    # dates frozen when the split was first computed on the big-5 Kalshi matches (1,758 matched),
+    # so adding data later can't move them. Holdout = anything not used to build the strategy.
+    kalshi_start="2025-05-11",
+    oos_start="2026-04-04",
+    holdout_start="2026-07-01",   # big-5 2026/27 games -> holdout
     tm_start_season=2015,
 )
 

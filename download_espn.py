@@ -17,9 +17,11 @@ import requests
 from config import PATHS
 
 BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-ESPN_LEAGUE = {"EPL": "eng.1", "LALIGA": "esp.1", "BUNDESLIGA": "ger.1", "SERIEA": "ita.1", "LIGUE1": "fra.1"}
+ESPN_LEAGUE = {"EPL": "eng.1", "LALIGA": "esp.1", "BUNDESLIGA": "ger.1", "SERIEA": "ita.1", "LIGUE1": "fra.1",
+               "PORTUGAL": "por.1", "EREDIVISIE": "ned.1"}
 KALSHI_LEAGUE = {"KXEPLGAME": "EPL", "KXLALIGAGAME": "LALIGA", "KXBUNDESLIGAGAME": "BUNDESLIGA",
-                 "KXSERIEAGAME": "SERIEA", "KXLIGUE1GAME": "LIGUE1"}
+                 "KXSERIEAGAME": "SERIEA", "KXLIGUE1GAME": "LIGUE1",
+                 "KXLIGAPORTUGALGAME": "PORTUGAL", "KXEREDIVISIEGAME": "EREDIVISIE"}
 S = requests.Session()
 
 
@@ -37,6 +39,7 @@ def get(path, **params):
 def kalshi_dates():
     mk = pd.read_parquet(PATHS["kalshi_markets"])
     mk["league"] = mk.series.map(KALSHI_LEAGUE)
+    mk = mk[mk.league.notna()]
     d = mk.event_ticker.str.extract(r"-(\d{2})([A-Z]{3})(\d{2})")
     tick = pd.to_datetime("20" + d[0] + d[1].str.title() + d[2], format="%Y%b%d", errors="coerce")
     close = pd.to_datetime(mk.close_time, format="ISO8601").dt.tz_convert(None).dt.normalize()

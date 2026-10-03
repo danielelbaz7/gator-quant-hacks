@@ -19,13 +19,16 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-from config import PATHS, TIME, SPLIT, RECENT_XG_WINDOW
+from config import PATHS, TIME, SPLIT, RECENT_XG_WINDOW, TRAIN_LEAGUES
 
-LEAGUE_TM = {"GB1": "EPL", "ES1": "LALIGA", "L1": "BUNDESLIGA", "IT1": "SERIEA", "FR1": "LIGUE1"}
+LEAGUE_TM = {"GB1": "EPL", "ES1": "LALIGA", "L1": "BUNDESLIGA", "IT1": "SERIEA", "FR1": "LIGUE1",
+             "PO1": "PORTUGAL", "NL1": "EREDIVISIE"}
 LEAGUE_FD = {"ENG-Premier League": "EPL", "ESP-La Liga": "LALIGA", "GER-Bundesliga": "BUNDESLIGA",
-             "ITA-Serie A": "SERIEA", "FRA-Ligue 1": "LIGUE1"}
+             "ITA-Serie A": "SERIEA", "FRA-Ligue 1": "LIGUE1",
+             "POR-Liga Portugal": "PORTUGAL", "NED-Eredivisie": "EREDIVISIE"}
 LEAGUE_KALSHI = {"KXEPLGAME": "EPL", "KXLALIGAGAME": "LALIGA", "KXBUNDESLIGAGAME": "BUNDESLIGA",
-                 "KXSERIEAGAME": "SERIEA", "KXLIGUE1GAME": "LIGUE1"}
+                 "KXSERIEAGAME": "SERIEA", "KXLIGUE1GAME": "LIGUE1",
+                 "KXLIGAPORTUGALGAME": "PORTUGAL", "KXEREDIVISIEGAME": "EREDIVISIE"}
 
 # --------------------------------------------------------------------------- names
 STOP = {"fc", "afc", "cf", "sc", "ac", "as", "ssc", "ss", "us", "rc", "rcd", "cd", "ud", "sd",
@@ -243,6 +246,8 @@ OU_OPENING = [("P>2.5", "P<2.5"), ("Avg>2.5", "Avg<2.5"), ("B365>2.5", "B365<2.5
 
 def load_football_data(path=None, which="closing"):
     df = pd.read_parquet(path or PATHS["fd_games"]).reset_index()
+    if path is None and os.path.exists(PATHS["fd_extra"]):          # extra leagues, same layout
+        df = pd.concat([df, pd.read_parquet(PATHS["fd_extra"])], ignore_index=True)
     cols = {c.lower(): c for c in df.columns}
     need = {k: cols.get(k) for k in ("league", "date", "home_team", "away_team")}
     if None in need.values():
@@ -290,6 +295,34 @@ def load_xg_shots(path=None):
     if not os.path.exists(path):
         return None
     return pd.read_parquet(path)
+
+
+# --------------------------------------------------------------------------- matches Transfermarkt lacks
+def espn_only_matches(matches, games_path="espn_games.parquet"):
+    """Finished games from ESPN (Kalshi dates) that no Transfermarkt match covers, e.g. the 2026/27
+    season, which the Transfermarkt dataset doesn't have yet. Result from ESPN; odds / events are
+    attached later like any match. src='espn': used for trading evaluation only, never training."""
+    if not os.path.exists(games_path):
+        return matches.iloc[:0]
+    g = pd.read_parquet(games_path)
+    g = g[g.league.isin(set(matches.league))].copy()
+    g["key"] = g.espn_id
+    g["date"] = pd.to_datetime(g.scheduled, utc=True).dt.tz_convert(None).dt.normalize()
+    right = matches.rename(columns={"match_id": "key"})[["key", "league", "date", "home", "away"]]
+    link = match_games(g, right, allow_swap=True)
+    last = matches.groupby("league").date.max()
+    g = g[~g.key.isin(link) & (g.date > g.league.map(last))]    # only past Transfermarkt's coverage
+    hg, ag = pd.to_numeric(g.home_score, errors="coerce"), pd.to_numeric(g.away_score, errors="coerce")
+    out = pd.DataFrame({"match_id": "espn" + g.espn_id.astype(str), "league": g.league,
+                        "season": g.date.dt.year.where(g.date.dt.month >= 7, g.date.dt.year - 1).astype(str),
+                        "date": g.date, "home": g.home, "away": g.away,
+                        "home_goals": hg, "away_goals": ag}).dropna(subset=["home_goals", "away_goals"])
+    out[["home_goals", "away_goals"]] = out[["home_goals", "away_goals"]].astype(int)
+    out["result"] = np.select([out.home_goals > out.away_goals, out.home_goals < out.away_goals], ["H", "A"], "D")
+    out["src"] = "espn"
+    print(f"  [espn] {len(out)} finished games after Transfermarkt's coverage added as evaluation-only matches: "
+          f"{out.groupby('league').size().to_dict()}")
+    return out
 
 
 # --------------------------------------------------------------------------- ESPN real-time timelines
@@ -377,7 +410,8 @@ def load_espn_shots(matches, path="espn_shots.parquet"):
     s = s.dropna(subset=["side"])
 
     d = matches.set_index("match_id").date
-    fit = s[pd.to_datetime(d.loc[s.match_id].to_numpy()) < pd.Timestamp(SPLIT["val_start"])]
+    fit = s[(pd.to_datetime(d.loc[s.match_id].to_numpy()) < pd.Timestamp(SPLIT["val_start"]))
+            & s.league.isin(TRAIN_LEAGUES)]
     table = fit.groupby("cat").goal.mean()
     s["xg"] = s.cat.map(table).fillna(fit.goal.mean())
     print(f"  [shots] {len(s)} shots in {s.match_id.nunique()} matches; xG by category "
@@ -468,7 +502,9 @@ def build_canonical():
     os.makedirs(PATHS["canonical"], exist_ok=True)
     print("loading Transfermarkt...")
     m, events = load_transfermarkt()
+    m["src"] = "tm"
     print(f"  {len(m)} matches, {len(events)} goal/red events")
+    m = pd.concat([m, espn_only_matches(m)], ignore_index=True)
 
     print("loading Football-Data odds...")
     from config import ODDS

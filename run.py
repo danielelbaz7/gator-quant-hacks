@@ -26,20 +26,32 @@ pd.set_option("display.width", 160)
 pd.set_option("display.max_columns", 30)
 
 
-def load(data_dir):
+def load(data_dir, holdout=False):
+    """Main study = big-5 Kalshi matches before SPLIT['holdout_start'] (in-sample + OOS, split at the
+    frozen SPLIT['oos_start']). holdout=True returns every other Kalshi match instead."""
     matches, events, candles = load_canonical(data_dir)
-    kal_ids = candles.match_id.unique()
-    kal_dates = matches.set_index("match_id").loc[kal_ids, "date"].sort_values()
-    kalshi_start = kal_dates.min()
-    oos_start = kal_dates.iloc[int(len(kal_dates) * (1 - config.SPLIT["oos_frac"]))]
-    print(f"Kalshi matches: {len(kal_ids)} | first {kalshi_start.date()} | "
-          f"OOS from {oos_start.date()} (most recent {config.SPLIT['oos_frac']:.0%})")
+    info = matches.set_index("match_id")
+    kalshi_start, oos_start = pd.Timestamp(config.SPLIT["kalshi_start"]), pd.Timestamp(config.SPLIT["oos_start"])
+    main = (candles.match_id.map(info.league).isin(config.LEAGUES_MAIN)
+            & (candles.match_id.map(info.date) < pd.Timestamp(config.SPLIT["holdout_start"]))).to_numpy()
+    candles = candles[~main] if holdout else candles[main]
+    d = info.loc[candles.match_id.unique(), "date"]
+    print(f"Kalshi matches ({'holdout' if holdout else 'main study'}): {len(d)} | first {d.min().date()} | "
+          f"OOS from {oos_start.date()} (frozen)")
     return matches, events, candles, kalshi_start, oos_start
+
+
+def train_matches(matches):
+    """Model history: Transfermarkt matches of the locked training leagues (never ESPN-only rows)."""
+    keep = matches.league.isin(config.TRAIN_LEAGUES)
+    if "src" in matches:
+        keep &= matches.src.eq("tm")
+    return matches[keep]
 
 
 def fit_model(matches, events, kalshi_start, fset, kind, C, val=True):
     feats = config.FEATURE_SETS[fset]
-    snaps = training_snapshots(matches, events, kalshi_start, config.TRAIN_MINUTES)
+    snaps = training_snapshots(train_matches(matches), events, kalshi_start, config.TRAIN_MINUTES)
     vstart = pd.Timestamp(config.SPLIT["val_start"])
     tr, va = snaps[snaps.date < vstart], snaps[snaps.date >= vstart]
     if val and len(va) and len(tr):
@@ -66,7 +78,8 @@ def walkforward_probs(matches, events, c, fset, kind, C):
     """Retrain at the start of every calendar month on all matches dated before that month
     (football data only, never Kalshi prices), then predict that month's candles."""
     feats = config.FEATURE_SETS[fset]
-    snaps = training_snapshots(matches, events, c.date.max() + pd.Timedelta(days=1), config.TRAIN_MINUTES)
+    snaps = training_snapshots(train_matches(matches), events, c.date.max() + pd.Timedelta(days=1),
+                               config.TRAIN_MINUTES)
     month = pd.to_datetime(c.date).dt.to_period("M").dt.to_timestamp()
     out = pd.Series(np.nan, index=c.index)
     for ms in sorted(month.unique()):
@@ -140,9 +153,31 @@ def save_model(model, a, kstart):
     print(f"\nsaved model -> {name}.pkl (+ _weights.csv, _info.json)")
 
 
+def holdout(a):
+    """Locked strategy on data never used to build it, ONCE per set: big-5 2026/27 games and the
+    extra leagues. Logged to results/holdout_runs.log."""
+    matches, events, candles, kstart, oos_start = load(a.data, holdout=True)
+    c = kalshi_frame(candles, matches, events, a.data)
+    f = f"{config.PATHS['results']}/holdout_runs.log"
+    done = open(f).read() if os.path.exists(f) else ""
+    params = bt_params(a)
+    sets = {"big5_2026_27": c[c.league.isin(config.LEAGUES_MAIN)],
+            "extra_leagues": c[c.league.isin(config.LEAGUES_EXTRA)]}
+    for name, x in sets.items():
+        if f'"holdout": "{name}"' in done:
+            print(f"!!! holdout {name} was already evaluated; this rerun must be disclosed")
+        print(f"\n===== HOLDOUT {name}: {x.match_id.nunique()} matches, {x.date.min().date()} .. {x.date.max().date()}")
+        tr, m1, m2 = report(x, model_probs(matches, events, kstart, x, a), params, f"HOLDOUT {name} {a.set}")
+        os.makedirs(config.PATHS["results"], exist_ok=True)
+        with open(f, "a") as fh:
+            fh.write(json.dumps(dict(time=datetime.now().isoformat(timespec="seconds"), holdout=name, set=a.set,
+                                     retrain=a.retrain, params=params, result=m1, result_x2=m2), default=str) + "\n")
+        tr.to_csv(f"{config.PATHS['results']}/trades_HOLDOUT_{name}_{a.set}.csv", index=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["build", "fit", "backtest", "grid", "oos"])
+    ap.add_argument("cmd", choices=["build", "fit", "backtest", "grid", "oos", "holdout"])
     ap.add_argument("--data", default=config.PATHS["canonical"])
     ap.add_argument("--set", default=config.MODEL["feature_set"])
     ap.add_argument("--kind", default=config.MODEL["kind"])
@@ -157,6 +192,8 @@ def main():
     if a.cmd == "build":
         return build_canonical()
 
+    if a.cmd == "holdout":
+        return holdout(a)
     matches, events, candles, kstart, oos_start = load(a.data)
 
     if a.cmd == "fit":
