@@ -62,6 +62,29 @@ def kalshi_frame(candles, matches, events, data_dir=None):
     return _CANDLE_CACHE["c"]
 
 
+def walkforward_probs(matches, events, c, fset, kind, C):
+    """Retrain at the start of every calendar month on all matches dated before that month
+    (football data only, never Kalshi prices), then predict that month's candles."""
+    feats = config.FEATURE_SETS[fset]
+    snaps = training_snapshots(matches, events, c.date.max() + pd.Timedelta(days=1), config.TRAIN_MINUTES)
+    month = pd.to_datetime(c.date).dt.to_period("M").dt.to_timestamp()
+    out = pd.Series(np.nan, index=c.index)
+    for ms in sorted(month.unique()):
+        model = WinProbModel(feats, kind, C).fit(snaps[snaps.date < ms])
+        rows = month == ms
+        out[rows] = predict_outcome(model, c[rows])
+        print(f"  [walk-forward] {ms:%Y-%m}: trained on matches before {ms.date()} "
+              f"({model.n_train} rows), predicted {rows.sum()} candles")
+    return out
+
+
+def model_probs(matches, events, kstart, c, a):
+    if a.retrain == "monthly":
+        return walkforward_probs(matches, events, c, a.set, a.kind, a.C)
+    model, _ = fit_model(matches, events, kstart, a.set, a.kind, a.C, val=False)
+    return predict_outcome(model, c)
+
+
 def predict_outcome(model, c):
     P = model.predict(c).to_numpy()
     k = c.outcome.map({"home": 0, "draw": 1, "away": 2}).to_numpy()
@@ -124,6 +147,7 @@ def main():
     ap.add_argument("--set", default=config.MODEL["feature_set"])
     ap.add_argument("--kind", default=config.MODEL["kind"])
     ap.add_argument("--C", type=float, default=config.MODEL["C"])
+    ap.add_argument("--retrain", choices=["none", "monthly"], default=config.MODEL["retrain"])
     for k, v in config.BACKTEST.items():
         if isinstance(v, bool):
             continue
@@ -148,11 +172,11 @@ def main():
     is_c, oos_c = c[c.date < oos_start], c[c.date >= oos_start]
 
     if a.cmd == "backtest":
-        model, _ = fit_model(matches, events, kstart, a.set, a.kind, a.C, val=False)
         params = bt_params(a)
-        tr, m1, m2 = report(is_c, predict_outcome(model, is_c), params, f"IN-SAMPLE {a.set}")
+        tr, m1, m2 = report(is_c, model_probs(matches, events, kstart, is_c, a), params,
+                            f"IN-SAMPLE {a.set} (retrain={a.retrain})")
         log_trial(dict(time=datetime.now().isoformat(timespec="seconds"), sample="IS",
-                       feature_set=a.set, kind=a.kind, C=a.C, **{k: v for k, v in params.items()},
+                       feature_set=a.set, kind=a.kind, C=a.C, retrain=a.retrain, **{k: v for k, v in params.items()},
                        **{f"net_{k}": v for k, v in m1.items() if k != "label"},
                        x2_pnl_total=m2.get("pnl_total")))
         os.makedirs(config.PATHS["results"], exist_ok=True)
@@ -187,13 +211,13 @@ def main():
         if os.path.exists(f):
             print("!!! OOS has already been evaluated:\n" + open(f).read() +
                   "Running it again means it is no longer out-of-sample. Disclose every run.")
-        model, _ = fit_model(matches, events, kstart, a.set, a.kind, a.C, val=False)
         params = bt_params(a)
-        tr, m1, m2 = report(oos_c, predict_outcome(model, oos_c), params, f"OUT-OF-SAMPLE {a.set}")
+        tr, m1, m2 = report(oos_c, model_probs(matches, events, kstart, oos_c, a), params,
+                            f"OUT-OF-SAMPLE {a.set} (retrain={a.retrain})")
         os.makedirs(config.PATHS["results"], exist_ok=True)
         with open(f, "a") as fh:
             fh.write(json.dumps(dict(time=datetime.now().isoformat(timespec="seconds"),
-                                     set=a.set, kind=a.kind, C=a.C, params=params,
+                                     set=a.set, kind=a.kind, C=a.C, retrain=a.retrain, params=params,
                                      result=m1), default=str) + "\n")
         tr.to_csv(f"{config.PATHS['results']}/trades_OOS_{a.set}.csv", index=False)
 

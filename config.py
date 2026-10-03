@@ -86,7 +86,9 @@ FEATURE_SETS = {
 }
 
 # default model: xg_draw_ou (chosen over xg_draw_pois: simpler, better on Kalshi-period games). kind: "logit" or "ols"
-MODEL = dict(feature_set="xg_draw_ou", kind="logit", C=1.0)
+# retrain: "none" = train once on matches before the first Kalshi match; "monthly" = walk-forward,
+# retrain each month on all matches before that month (football data only)
+MODEL = dict(feature_set="xg_draw_ou", kind="logit", C=1.0, retrain="none")
 
 BACKTEST = dict(
     threshold=0.08,      # required edge, in probability points, AFTER fees (chosen in-sample, trials 4-12)
@@ -105,9 +107,9 @@ BACKTEST = dict(
 
 # keys that are also BACKTEST keys (threshold, cooldown, ...) override the trading rule per combo
 GRID = dict(
-    feature_set=["baseline"],              # baseline_value: no validation gain (0.7540 vs 0.7539)
+    feature_set=["xg_draw_ou"],
     kind=["logit"],
     C=[1.0],
-    threshold=[0.03, 0.05, 0.08],
-    cooldown=[0, 3, 5],
+    threshold=[0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.10, 0.12, 0.15],
+    cooldown=[3],
 )
