@@ -1,0 +1,10 @@
+# Raw / licensed data: never commit (use the download scripts instead)
+*.parquet
+*.duckdb
+data/
+.env
+
+# Python / tooling
+__pycache__/
+*.pyc
+.venv/
