@@ -88,7 +88,7 @@ FEATURE_SETS = {
 # default model: xg_draw_ou (chosen over xg_draw_pois: simpler, better on Kalshi-period games). kind: "logit" or "ols"
 # retrain: "none" = train once on matches before the first Kalshi match; "monthly" = walk-forward,
 # retrain each month on all matches before that month (football data only)
-MODEL = dict(feature_set="xg_draw_ou", kind="logit", C=1.0, retrain="none")
+MODEL = dict(feature_set="xg_draw_ou", kind="logit", C=1.0, retrain="monthly")
 
 BACKTEST = dict(
     threshold=0.08,      # required edge, in probability points, AFTER fees (chosen in-sample, trials 4-12)
