@@ -1,0 +1,5 @@
+sample,costs,trades,contracts,matches,hit_rate,pnl_total,pnl_per_trade,return_on_capital,avg_cost,sharpe_daily_ann,max_drawdown,t_stat
+in-sample,x1,198,198.0,154,0.343,3.41,0.0172,0.0548,0.0121,0.53,-7.77,0.58
+in-sample,x2,119,119.0,89,0.294,1.85,0.0156,0.0605,0.0211,0.39,-3.52,0.42
+out-of-sample,x1,67,67.0,51,0.418,3.07,0.0459,0.1273,0.0116,2.01,-2.48,0.86
+out-of-sample,x2,43,43.0,31,0.395,2.03,0.0473,0.1447,0.021,1.81,-2.04,0.72
