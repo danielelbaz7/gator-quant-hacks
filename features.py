@@ -213,6 +213,77 @@ def f_level_x_egl(df):
     return (_gd(df) == 0).astype(float) * _egl(df)
 
 
+# Per-team expected goals: split the O/U total so that independent Poisson(lam_h), Poisson(lam_a)
+# reproduce the 1X2 market's P(home) - P(away). Solved once on a grid, then interpolated per row.
+def _team_lambda_table():
+    from scipy.stats import poisson
+    T = np.linspace(1.0, 6.0, 101)
+    S = np.linspace(-4.0, 4.0, 401)
+    g = np.arange(15)
+    diff = np.full((len(T), len(S)), np.nan)
+    for i, t in enumerate(T):
+        lh, la = np.clip((t + S) / 2, 1e-3, None), np.clip((t - S) / 2, 1e-3, None)
+        ph, pa = poisson.pmf(g[None, :], lh[:, None]), poisson.pmf(g[None, :], la[:, None])
+        joint = ph[:, :, None] * pa[:, None, :]                     # [s, home goals, away goals]
+        hw = np.tril(np.ones((15, 15)), -1).astype(bool)            # home goals > away goals
+        diff[i] = joint[:, hw].sum(1) - joint[:, hw.T].sum(1)
+    return T, S, diff
+
+
+_TL = None
+
+
+def _team_lambdas(df):
+    global _TL
+    if _TL is None:
+        _TL = _team_lambda_table()
+    T, S, diff = _TL
+    tot = _lambda(df).to_numpy()
+    target = (col(df, "p_home") - col(df, "p_away")).to_numpy()
+    ti = np.clip(np.round((np.nan_to_num(tot, nan=2.7) - T[0]) / (T[1] - T[0])).astype(int), 0, len(T) - 1)
+    sup = np.full(len(df), np.nan)
+    for k in np.unique(ti):                                         # P(H)-P(A) is increasing in supremacy
+        r = ti == k
+        sup[r] = np.interp(target[r], diff[k], S)
+    lh, la = (tot + sup) / 2, (tot - sup) / 2
+    return pd.Series(np.clip(lh, 0.05, None), index=df.index), pd.Series(np.clip(la, 0.05, None), index=df.index)
+
+
+def _poisson_inplay(df):
+    """P(home win), P(draw), P(away win) from the current score and each team's expected goals left."""
+    from scipy.stats import skellam
+    lh, la = _team_lambdas(df)
+    left = _left(df)
+    mh, ma = (lh * left + 1e-6).to_numpy(), (la * left + 1e-6).to_numpy()
+    gd = _gd(df).to_numpy()
+    p_draw = skellam.pmf(-gd, mh, ma)                    # home_left - away_left == -gd
+    p_away = skellam.cdf(-gd - 1, mh, ma)                # home_left - away_left <  -gd
+    p_home = 1 - p_draw - p_away
+    clip = lambda x: np.clip(x, 1e-6, 1 - 1e-6)
+    return clip(p_home), clip(p_draw), clip(p_away)
+
+
+@feature("pois_logit_ha")
+def f_pois_logit_ha(df):
+    """Structural Poisson in-play model: log(P(home win) / P(away win))."""
+    ph, pd_, pa = _poisson_inplay(df)
+    return pd.Series(np.log(ph / pa), index=df.index).where(col(df, "p_over25").notna())
+
+
+@feature("pois_logit_draw")
+def f_pois_logit_draw(df):
+    ph, pd_, pa = _poisson_inplay(df)
+    return pd.Series(np.log(pd_ / (1 - pd_)), index=df.index).where(col(df, "p_over25").notna())
+
+
+@feature("trailer_egl")
+def f_trailer_egl(df):
+    """Expected goals left for the team that is behind (0 when level): direct comeback potential."""
+    lh, la = _team_lambdas(df)
+    gd = _gd(df)
+    return (np.where(gd < 0, lh, np.where(gd > 0, la, 0.0)) * _left(df)).where(col(df, "p_over25").notna())
+
+
 @feature("value_logratio")
 def f_value_logratio(df):
     return np.log(col(df, "home_value") / col(df, "away_value"))

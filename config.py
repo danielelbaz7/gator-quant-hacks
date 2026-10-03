@@ -69,14 +69,24 @@ FEATURE_SETS = {
                    "xg_diff", "xg_diff_x_left",
                    "level_over_sqrt_left", "abs_gd", "abs_gd_over_sqrt_left",
                    "pre_total_goals", "exp_goals_left", "gd_over_sqrt_egl", "abs_gd_over_sqrt_egl", "level_x_egl"],
+    # xg_draw_ou + per-team expected goals (O/U total split by the 1X2 odds) fed through a Poisson
+    # in-play model: live P(H)/P(D)/P(A) from current score + each team's goals still expected.
+    # Validation logloss 0.7493 -> 0.7487 (paired t = -2.1).
+    "xg_draw_pois": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
+                     "elapsed", "red_diff", "red_diff_x_left",
+                     "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
+                     "xg_diff", "xg_diff_x_left",
+                     "level_over_sqrt_left", "abs_gd", "abs_gd_over_sqrt_left",
+                     "pre_total_goals", "exp_goals_left", "gd_over_sqrt_egl", "abs_gd_over_sqrt_egl", "level_x_egl",
+                     "pois_logit_ha", "pois_logit_draw", "trailer_egl"],
     "full": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
              "elapsed", "total_goals", "red_diff", "red_diff_x_left",
              "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
              "value_logratio", "value_x_left", "h2h_gd", "xg_diff", "xg_diff_x_left"],
 }
 
-# default model: xg_draw (best validation logloss, see FEATURE_SETS). kind: "logit" or "ols"
-MODEL = dict(feature_set="xg_draw", kind="logit", C=1.0)
+# default model: xg_draw_ou (chosen over xg_draw_pois: simpler, better on Kalshi-period games). kind: "logit" or "ols"
+MODEL = dict(feature_set="xg_draw_ou", kind="logit", C=1.0)
 
 BACKTEST = dict(
     threshold=0.08,      # required edge, in probability points, AFTER fees (chosen in-sample, trials 4-12)
