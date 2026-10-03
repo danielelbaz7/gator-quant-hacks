@@ -1,0 +1,33 @@
+{
+ "saved": "2026-10-03T13:14:52",
+ "feature_set": "xg_draw_pois",
+ "kind": "logit",
+ "C": 1.0,
+ "features": [
+  "goal_diff",
+  "gd_x_elapsed",
+  "gd_over_sqrt_left",
+  "level_x_elapsed",
+  "elapsed",
+  "red_diff",
+  "red_diff_x_left",
+  "pre_logit_ha",
+  "pre_logit_x_left",
+  "pre_logit_draw",
+  "xg_diff",
+  "xg_diff_x_left",
+  "level_over_sqrt_left",
+  "abs_gd",
+  "abs_gd_over_sqrt_left",
+  "pre_total_goals",
+  "exp_goals_left",
+  "gd_over_sqrt_egl",
+  "abs_gd_over_sqrt_egl",
+  "level_x_egl",
+  "pois_logit_ha",
+  "pois_logit_draw",
+  "trailer_egl"
+ ],
+ "n_train_rows": 296742,
+ "trained_on_matches_before": "2025-05-11"
+}
