@@ -11,6 +11,7 @@ import argparse
 import itertools
 import json
 import os
+import pickle
 from datetime import datetime
 
 import numpy as np
@@ -97,6 +98,22 @@ def log_trial(row):
     print(f"\n[trial #{n} logged to {f} -- report this count in the note]")
 
 
+def save_model(model, a, kstart):
+    """models/<set>_<kind>_C<C>.pkl (load with pickle; needs model.py) + readable weights/info."""
+    os.makedirs("models", exist_ok=True)
+    name = f"models/{a.set}_{a.kind}_C{a.C}"
+    with open(f"{name}.pkl", "wb") as fh:
+        pickle.dump(model, fh)
+    w = model.coefficients()
+    w.loc["intercept"] = model.pipe[-1].intercept_.round(3)
+    w.to_csv(f"{name}_weights.csv")
+    with open(f"{name}_info.json", "w") as fh:
+        json.dump(dict(saved=datetime.now().isoformat(timespec="seconds"), feature_set=a.set,
+                       kind=a.kind, C=a.C, features=model.features, n_train_rows=model.n_train,
+                       trained_on_matches_before=str(kstart.date())), fh, indent=1)
+    print(f"\nsaved model -> {name}.pkl (+ _weights.csv, _info.json)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["build", "fit", "backtest", "grid", "oos"])
@@ -121,6 +138,7 @@ def main():
         vs = snaps[snaps.date >= pd.Timestamp(config.SPLIT["val_start"])]
         if len(vs):
             print("\ncalibration on validation:\n", calibration(model, vs).to_string())
+        save_model(model, a, kstart)
         return
 
     c = kalshi_frame(candles, matches, events)
