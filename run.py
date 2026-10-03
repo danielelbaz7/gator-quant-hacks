@@ -93,8 +93,11 @@ def report(c, prob, params, title):
 def log_trial(row):
     os.makedirs(config.PATHS["results"], exist_ok=True)
     f = f"{config.PATHS['results']}/trials.csv"
-    pd.DataFrame([row]).to_csv(f, mode="a", header=not os.path.exists(f), index=False)
-    n = len(pd.read_csv(f))
+    old = pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
+    row = {**{k: v for k, v in config.BACKTEST.items()}, **row}       # grid rows: record full rule too
+    new = pd.concat([old, pd.DataFrame([{"trial": len(old) + 1, **row}])], ignore_index=True)
+    new.to_csv(f, index=False)                                         # rewrite: columns stay aligned
+    n = len(new)
     print(f"\n[trial #{n} logged to {f} -- report this count in the note]")
 
 
@@ -169,7 +172,7 @@ def main():
             params = {**bt_params(a), **{k: v for k, v in g.items() if k in config.BACKTEST}}
             m1 = metrics(run_backtest(is_c, models[mk], **params))
             m2 = metrics(run_backtest(is_c, models[mk], **{**params, "cost_mult": params["cost_mult"] * 2}))
-            row = dict(time=datetime.now().isoformat(timespec="seconds"), sample="IS", **g,
+            row = dict(time=datetime.now().isoformat(timespec="seconds"), sample="IS", **{**params, **g},
                        **{f"net_{k}": v for k, v in m1.items() if k != "label"},
                        x2_pnl_total=m2.get("pnl_total"))
             rows.append(row)
