@@ -1,0 +1,17 @@
+,H,D,A
+goal_diff,0.185,-0.022,-0.163
+gd_x_elapsed,0.973,0.012,-0.985
+gd_over_sqrt_left,0.648,-0.02,-0.628
+level_x_elapsed,-0.006,0.029,-0.023
+elapsed,-0.121,0.212,-0.092
+red_diff,0.115,-0.01,-0.105
+red_diff_x_left,0.047,-0.015,-0.032
+pre_logit_ha,0.388,0.044,-0.432
+pre_logit_x_left,0.136,-0.01,-0.126
+pre_logit_draw,-0.042,0.094,-0.051
+xg_diff,0.034,0.021,-0.054
+xg_diff_x_left,0.039,-0.021,-0.018
+level_over_sqrt_left,-0.085,0.168,-0.083
+abs_gd,0.035,-0.041,0.006
+abs_gd_over_sqrt_left,0.083,-0.137,0.055
+intercept,0.362,0.02,-0.383

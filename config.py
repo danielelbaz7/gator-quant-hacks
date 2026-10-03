@@ -50,16 +50,24 @@ FEATURE_SETS = {
                     "elapsed", "red_diff", "red_diff_x_left",
                     "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
                     "xg_diff", "xg_diff_x_left"],
+    # baseline_xg + |gd| / level-score shape: fixes late level-game draw underprediction
+    # (validation logloss 0.7532 -> 0.7507, paired t = -7.4). late_tilt_x_elapsed tested: no gain (t = -0.4).
+    "xg_draw": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
+                "elapsed", "red_diff", "red_diff_x_left",
+                "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
+                "xg_diff", "xg_diff_x_left",
+                "level_over_sqrt_left", "abs_gd", "abs_gd_over_sqrt_left"],
     "full": ["goal_diff", "gd_x_elapsed", "gd_over_sqrt_left", "level_x_elapsed",
              "elapsed", "total_goals", "red_diff", "red_diff_x_left",
              "pre_logit_ha", "pre_logit_x_left", "pre_logit_draw",
              "value_logratio", "value_x_left", "h2h_gd", "xg_diff", "xg_diff_x_left"],
 }
 
-MODEL = dict(kind="logit", C=1.0)   # kind: "logit" (multinomial logistic) or "ols" (linear probability)
+# default model: xg_draw (best validation logloss, see FEATURE_SETS). kind: "logit" or "ols"
+MODEL = dict(feature_set="xg_draw", kind="logit", C=1.0)
 
 BACKTEST = dict(
-    threshold=0.04,      # required edge, in probability points, AFTER fees
+    threshold=0.08,      # required edge, in probability points, AFTER fees (chosen in-sample, trials 4-12)
     max_spread=0.06,     # skip quotes wider than this (dollars on a $1 contract)
     min_minute=0,        # earliest decision: negative = clock minutes before kickoff
     max_minute=85,       # latest decision, in match minutes
@@ -69,7 +77,7 @@ BACKTEST = dict(
     cost_mult=1.0,       # set 2.0 for the "double the costs" check (done automatically in reports)
     exec_next_bar=True,  # signal on bar t, fill at bar t+1 quotes
     one_per="ticker",    # "ticker" = max one trade per outcome market, "match" = one per match
-    cooldown=0,          # minutes to stand aside after a sharp price jump in the match (0 = off)
+    cooldown=3,          # minutes to stand aside after a sharp price jump in the match (0 = off)
     jump=0.07,           # mid move in one bar (dollars) that counts as a jump; goals move ~0.15-0.20
 )
 

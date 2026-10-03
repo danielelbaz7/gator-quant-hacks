@@ -143,7 +143,9 @@ def load_transfermarkt(path=None, start_season=None):
 
     m = m.merge(_squad_values(con, g), on="match_id", how="left")
     m["h2h_gd"] = _h2h(m)
-    return m, events.dropna(subset=["minute"])
+    events = events.dropna(subset=["minute"])
+    m = m.merge(_late_form(m, events), on="match_id", how="left")
+    return m, events
 
 
 def _resolve_own_goals(goals, m):
@@ -187,6 +189,35 @@ def _squad_values(con, g):
     sv = sv.reset_index()
     sv["match_id"] = "tm" + sv.game_id.astype(str)
     return sv[["match_id"] + [c for c in ("home_value", "away_value") if c in sv]]
+
+
+def _late_form(m, events, window=38, prior=10, late_min=76):
+    """Per team, share of goals scored / conceded at minute >= late_min over its previous `window`
+    matches (strictly before the match), shrunk toward the league-wide share with `prior` goals."""
+    g = events[events.kind == "goal"].merge(m[["match_id"]], on="match_id")
+    g["late"] = g.minute >= late_min
+    base = g.late.mean()
+    per = g.groupby(["match_id", "side"]).agg(n=("late", "size"), late=("late", "sum")).unstack(fill_value=0)
+    rows = []
+    for side, opp in (("home", "away"), ("away", "home")):
+        x = m[["match_id", "date", f"{side}_id"]].rename(columns={f"{side}_id": "team"})
+        pf = per.reindex(x.match_id).fillna(0)
+        x["gf"], x["lf"] = pf[("n", side)].to_numpy(), pf[("late", side)].to_numpy()
+        x["ga"], x["la"] = pf[("n", opp)].to_numpy(), pf[("late", opp)].to_numpy()
+        x["side"] = side
+        rows.append(x)
+    t = pd.concat(rows).sort_values(["team", "date"], kind="stable").reset_index(drop=True)
+    roll = lambda s: s.groupby(t.team).transform(lambda v: v.shift(1).rolling(window, min_periods=1).sum())
+    for a, b, name in (("lf", "gf", "late_for"), ("la", "ga", "late_against")):
+        t[name] = (roll(t[a]) + prior * base) / (roll(t[b]) + prior)
+        t[name] = t[name].fillna(base)                      # first match of a team: league share
+    out = m[["match_id"]].copy()
+    for side in ("home", "away"):
+        x = t[t.side == side].set_index("match_id")
+        out[f"{side}_late_for"] = out.match_id.map(x.late_for)
+        out[f"{side}_late_against"] = out.match_id.map(x.late_against)
+    print(f"  [tm] late-goal form: league share of goals at {late_min}'+ = {base:.3f}")
+    return out
 
 
 def _h2h(m, last_n=5):
@@ -557,7 +588,8 @@ def state_at(idx, match_ids, cutoffs):
     return pd.DataFrame(out)
 
 
-PREMATCH_COLS = ["p_home", "p_draw", "p_away", "home_value", "away_value", "h2h_gd"]
+PREMATCH_COLS = ["p_home", "p_draw", "p_away", "home_value", "away_value", "h2h_gd",
+                 "home_late_for", "home_late_against", "away_late_for", "away_late_against"]
 
 
 def training_snapshots(matches, events, before, minutes):

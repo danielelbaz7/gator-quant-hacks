@@ -78,6 +78,38 @@ def f_level_x_elapsed(df):
     return (_gd(df) == 0).astype(float) * _elapsed(df)
 
 
+@feature("level_over_sqrt_left")
+def f_level_over_sqrt_left(df):
+    """Level score locks in sharply near the end (draw signal grows like 1/sqrt(time left))."""
+    return (_gd(df) == 0).astype(float) / np.sqrt(_left(df) + 1 / 90)
+
+
+@feature("level_over_left")
+def f_level_over_left(df):
+    """Even sharper end-of-match lock-in for level scores (1 / time left)."""
+    return (_gd(df) == 0).astype(float) / (_left(df) + 1 / 90)
+
+
+@feature("abs_gd")
+def f_abs_gd(df):
+    """Size of the lead regardless of side: draws depend on |gd|, which signed features can't express."""
+    return _gd(df).abs()
+
+
+@feature("abs_gd_over_sqrt_left")
+def f_abs_gd_over_sqrt_left(df):
+    return _gd(df).abs() / np.sqrt(_left(df) + 1 / 90)
+
+
+@feature("late_tilt_x_elapsed")
+def f_late_tilt_x_elapsed(df):
+    """Home minus away tendency for late goals (share of goals scored + conceded-by-opponent after
+    75', previous 38 games), mattering more as the match gets late."""
+    home = col(df, "home_late_for") + col(df, "away_late_against")
+    away = col(df, "away_late_for") + col(df, "home_late_against")
+    return (home - away) * _elapsed(df)
+
+
 @feature("total_goals")
 def f_total_goals(df):
     return col(df, "home_goals") + col(df, "away_goals")

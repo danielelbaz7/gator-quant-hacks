@@ -21,7 +21,7 @@ def logloss(p, y):
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--set", default="baseline")
+ap.add_argument("--set", default=config.MODEL["feature_set"])
 ap.add_argument("--kind", default=config.MODEL["kind"])
 ap.add_argument("--C", type=float, default=config.MODEL["C"])
 ap.add_argument("--event_lag", type=float, default=None, help="override TIME[\"event_lag\"] (minutes)")

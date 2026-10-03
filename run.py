@@ -121,7 +121,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["build", "fit", "backtest", "grid", "oos"])
     ap.add_argument("--data", default=config.PATHS["canonical"])
-    ap.add_argument("--set", default="baseline")
+    ap.add_argument("--set", default=config.MODEL["feature_set"])
     ap.add_argument("--kind", default=config.MODEL["kind"])
     ap.add_argument("--C", type=float, default=config.MODEL["C"])
     for k, v in config.BACKTEST.items():
