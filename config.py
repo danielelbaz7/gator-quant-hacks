@@ -21,7 +21,7 @@ TIME = dict(
     halftime_break=15,       # clock minutes of halftime
     max_minute=97,           # match minute after which we call the match over
     event_lag=2,             # minutes after an event before the model is allowed to "know" it
-    kickoff_from_close=115,  # fallback only: kickoff ~= market close_time minus this many minutes
+    kickoff_from_close=122,  # fallback only: kickoff ~= market close_time minus this many minutes
 )
 
 SPLIT = dict(

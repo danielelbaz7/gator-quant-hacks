@@ -105,11 +105,11 @@ def load_transfermarkt(path=None, start_season=None):
     g = con.execute(f"""
         select game_id, competition_id, season, date, home_club_id, away_club_id,
                home_club_goals, away_club_goals, home_club_name, away_club_name
-        from games where competition_id in {comps} and season >= {start_season}""").df()
+        from games where competition_id in {comps} and season >= '{start_season}'""").df()
     ev = con.execute(f"""
         select e.game_id, e.minute, e.type, e.club_id, e.description
         from game_events e join games g on e.game_id = g.game_id
-        where g.competition_id in {comps} and g.season >= {start_season}""").df()
+        where g.competition_id in {comps} and g.season >= '{start_season}'""").df()
 
     g = g.dropna(subset=["home_club_goals", "away_club_goals"])
     m = pd.DataFrame({
@@ -171,7 +171,7 @@ def _resolve_own_goals(goals, m):
 def _squad_values(con, g):
     """Sum of starting XI market values on the day before the match. Skipped if tables differ."""
     try:
-        lu = con.execute("""select game_id, club_id, player_id, type from game_lineups""").df()
+        lu = con.execute("""select cast(game_id as varchar) as game_id, club_id, player_id, type from game_lineups""").df()
         val = con.execute("""select player_id, date, market_value_in_eur from player_valuations""").df()
     except Exception as e:
         print(f"  [tm] squad values skipped ({e})")
@@ -232,8 +232,11 @@ def load_football_data(path=None, which="closing"):
     if tcol:   # football-data times are believed to be UK local time; verify on a few matches
         local = pd.to_datetime(out.date.dt.strftime("%Y-%m-%d") + " " + df[tcol].astype(str),
                                errors="coerce")
-        out["kickoff_utc"] = local.dt.tz_localize("Europe/London", ambiguous="NaT",
-                                                  nonexistent="NaT").dt.tz_convert("UTC")
+    else:      # soccerdata folds Time into the date column; 12:00 is its "no time" placeholder
+        local = out.date.where(out.date.dt.strftime("%H:%M") != "12:00")
+    out["kickoff_utc"] = local.dt.tz_localize("Europe/London", ambiguous="NaT",
+                                              nonexistent="NaT").dt.tz_convert("UTC")
+    out["date"] = out.date.dt.normalize()
     return out
 
 
