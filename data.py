@@ -251,6 +251,47 @@ def load_xg_shots(path=None):
     return pd.read_parquet(path)
 
 
+# --------------------------------------------------------------------------- ESPN real-time timelines
+def load_espn(matches, games_path="espn_games.parquet", events_path="espn_events.parquet"):
+    """Real wall-clock kickoff / halftime / 2nd-half start / full time per match, plus goal and
+    red-card times. Returns (timings per match_id, live_events with UTC time t). Goal events are
+    only kept for matches where ESPN's goals reproduce the Transfermarkt final score."""
+    if not (os.path.exists(games_path) and os.path.exists(events_path)):
+        print("  [espn] no ESPN files (python download_espn.py); using fixed clock mapping")
+        return None, None
+    g = pd.read_parquet(games_path)
+    ev = pd.read_parquet(events_path)
+    ev["t"] = pd.to_datetime(ev.wallclock, utc=True)
+    g["key"] = g.espn_id
+    g["date"] = pd.to_datetime(g.scheduled, utc=True).dt.tz_convert(None).dt.normalize()
+    right = matches.rename(columns={"match_id": "key"})[["key", "league", "date", "home", "away"]]
+    link = match_games(g, right, allow_swap=False)
+    g["match_id"] = g.key.map(lambda k: link.get(k, (None,))[0])
+    g = g.dropna(subset=["match_id"]).drop_duplicates("match_id")
+    print(f"  [espn] matched {len(g)} ESPN games to matches")
+
+    first = ev.dropna(subset=["t"]).groupby(["espn_id", "type"]).t.min().unstack()
+    tim = g.set_index("espn_id")[["match_id"]].join(first.reindex(columns=[
+        "kickoff", "halftime", "start-2nd-half", "end-regular-time"]))
+    tim = tim.rename(columns={"kickoff": "ko_real", "halftime": "ht_start",
+                              "start-2nd-half": "h2_start", "end-regular-time": "ft_time"})
+
+    side = g.set_index("espn_id")[["match_id", "home_id", "away_id"]]
+    e = ev[ev.espn_id.isin(side.index) & (ev.scoring | (ev.type == "red-card"))].join(side, on="espn_id")
+    e["side"] = np.where(e.team_id == e.home_id, "home", np.where(e.team_id == e.away_id, "away", None))
+    e["kind"] = np.where(e.scoring, "goal", "red")
+    e = e.dropna(subset=["side", "t"])
+    final = matches.set_index("match_id")[["home_goals", "away_goals"]]
+    n = e[e.kind == "goal"].groupby(["match_id", "side"]).size().unstack(fill_value=0)
+    n = n.reindex(index=g.match_id, columns=["home", "away"], fill_value=0)
+    ok = (n.home == final.loc[n.index, "home_goals"]) & (n.away == final.loc[n.index, "away_goals"])
+    good = set(ok[ok].index)
+    print(f"  [espn] goal times reproduce the final score for {ok.mean():.1%} of matched games "
+          f"({(~ok).sum()} fall back to Transfermarkt minutes)")
+    live = e[e.match_id.isin(good)][["match_id", "t", "side", "kind"]].reset_index(drop=True)
+    return tim.reset_index(drop=True), live
+
+
 # --------------------------------------------------------------------------- Kalshi
 def _pick(c, name):
     d = pd.to_numeric(c.get(f"{name}_dollars"), errors="coerce") if f"{name}_dollars" in c else None
@@ -361,8 +402,23 @@ def build_canonical():
     kick = (ko if ko is not None else pd.Series(dtype="datetime64[ns, UTC]")).reindex(close.index)
     src = np.where(kick.notna(), "football-data", "close_time")
     kick = kick.fillna(fallback)
+
+    print("loading ESPN timelines...")
+    tim, live = load_espn(m)
+    if tim is not None:
+        tim = tim.set_index("match_id").reindex(close.index)
+        real = tim.ko_real.notna() & tim.h2_start.notna()
+        diff = (tim.ko_real - kick)[real].dt.total_seconds() / 60
+        print(f"  [kickoff] real (ESPN) minus scheduled kickoff: median {diff.median():.1f} min, "
+              f"IQR {diff.quantile(.25):.1f}..{diff.quantile(.75):.1f}")
+        kick = kick.where(~real, tim.ko_real)
+        src = np.where(real, "espn", src)
     m = m.merge(pd.DataFrame({"match_id": kick.index, "kickoff": kick.to_numpy(), "kickoff_src": src}),
                 on="match_id", how="left")
+    if tim is not None:
+        m = m.merge(tim[["ht_start", "h2_start", "ft_time"]].where(real), left_on="match_id",
+                    right_index=True, how="left")
+        live.to_parquet(f"{PATHS['canonical']}/live_events.parquet")
     print(f"  kickoff sources: {pd.Series(src).value_counts().to_dict()}")
 
     m.to_parquet(f"{PATHS['canonical']}/matches.parquet")
@@ -375,6 +431,12 @@ def load_canonical(d=None):
     d = d or PATHS["canonical"]
     return (pd.read_parquet(f"{d}/matches.parquet"), pd.read_parquet(f"{d}/events.parquet"),
             pd.read_parquet(f"{d}/candles.parquet"))
+
+
+def load_live_events(d=None):
+    """ESPN goal/red times (UTC) for Kalshi matches; None if build ran without ESPN files."""
+    f = f"{d or PATHS['canonical']}/live_events.parquet"
+    return pd.read_parquet(f) if os.path.exists(f) else None
 
 
 # --------------------------------------------------------------------------- match state
@@ -434,25 +496,52 @@ def training_snapshots(matches, events, before, minutes):
     return pd.concat([rep[cols], st], axis=1)
 
 
-def clock_to_match(t, kickoff):
-    """Clock time -> (match minute, phase, signed clock minutes since kickoff)."""
-    clock = (pd.to_datetime(t, utc=True) - pd.to_datetime(kickoff, utc=True)).dt.total_seconds().to_numpy() / 60
+def _mins(a, b):
+    return (pd.to_datetime(a, utc=True) - pd.to_datetime(b, utc=True)).dt.total_seconds().to_numpy() / 60
+
+
+def clock_to_match(t, kickoff, ht_start=None, h2_start=None, ft_time=None):
+    """Clock time -> (match minute, phase, signed clock minutes since kickoff).
+    Rows with real ESPN halftime / 2nd-half times use them; others use the fixed TIME mapping."""
+    clock = _mins(t, kickoff)
     FH, HT = TIME["first_half_clock"], TIME["halftime_break"]
     minute = np.where(clock < 0, 0.0, np.where(clock <= FH, clock,
                       np.where(clock <= FH + HT, 45.0, 45.0 + (clock - FH - HT))))
     phase = np.select([clock < 0, clock <= FH, clock <= FH + HT, minute <= TIME["max_minute"]],
                       ["pre", "1H", "HT", "2H"], "post")
+    if h2_start is not None:
+        real = pd.notna(h2_start).to_numpy() & pd.notna(ht_start).to_numpy()
+        to_ht, to_h2 = _mins(t, ht_start), _mins(t, h2_start)
+        to_ft = _mins(t, ft_time)
+        m2 = np.where(clock < 0, 0.0, np.where(to_ht < 0, np.minimum(clock, 45.0),
+                      np.where(to_h2 < 0, 45.0, 45.0 + to_h2)))
+        p2 = np.select([clock < 0, to_ht < 0, to_h2 < 0,
+                        np.where(np.isnan(to_ft), m2 <= TIME["max_minute"], to_ft < 0)],
+                       ["pre", "1H", "HT", "2H"], "post")
+        minute, phase = np.where(real, m2, minute), np.where(real, p2, phase)
     return minute, phase, clock
 
 
-def candle_snapshots(candles, matches, events):
-    """Attach match minute, phase and the match state known at each candle (with event lag)."""
+def candle_snapshots(candles, matches, events, live_events=None):
+    """Attach match minute, phase and the match state known at each candle (with event lag).
+    Matches in live_events (ESPN wall-clock goal/red times) get their state from real times:
+    an event counts once t - event_lag has passed it. Others use Transfermarkt minutes."""
     m = matches.set_index("match_id")
-    c = candles.join(m[["league", "date", "kickoff"] + [x for x in PREMATCH_COLS if x in m]],
+    real_cols = [x for x in ("ht_start", "h2_start", "ft_time") if x in m]
+    c = candles.join(m[["league", "date", "kickoff"] + real_cols + [x for x in PREMATCH_COLS if x in m]],
                      on="match_id")
     c = c[c.kickoff.notna()].reset_index(drop=True)
-    c["minute"], c["phase"], c["clock"] = clock_to_match(c.t, c.kickoff)
+    c["minute"], c["phase"], c["clock"] = clock_to_match(c.t, c.kickoff, *(c.get(x) for x in
+                                                         ("ht_start", "h2_start", "ft_time")))
     cutoff = np.where(c.phase == "pre", -1.0, c.minute - TIME["event_lag"])
     st = state_at(_index_events(events[events.match_id.isin(c.match_id.unique())]),
                   c.match_id, cutoff)
+    if live_events is not None and len(live_events):
+        epoch = pd.Timestamp("1970-01-01", tz="UTC")                                  # unit-safe epoch minutes
+        ep = lambda x: (pd.to_datetime(x, utc=True) - epoch).dt.total_seconds().to_numpy() / 60
+        live = live_events.assign(minute=ep(live_events.t), xg=np.nan)
+        use = c.match_id.isin(set(live.match_id)).to_numpy()
+        st_live = state_at(_index_events(live), c.match_id, ep(c.t) - TIME["event_lag"])
+        st.loc[use, :] = st_live.loc[use, :].to_numpy()
+        c["state_src"] = np.where(use, "espn", "tm")
     return pd.concat([c, st], axis=1)

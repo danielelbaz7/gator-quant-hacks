@@ -1,0 +1,4 @@
+time,sample,feature_set,kind,C,threshold,max_spread,min_minute,max_minute,skip_halftime,fee_rate,slippage,cost_mult,exec_next_bar,one_per,block_prematch,net_trades,net_matches,net_hit_rate,net_pnl_total,net_pnl_per_trade,net_return_on_capital,net_avg_cost,net_sharpe_daily_ann,net_max_drawdown,net_t_stat,x2_pnl_total
+2026-10-03T11:00:35,IS,baseline,logit,1.0,0.04,0.06,0,85,True,0.07,0.0,1.0,True,ticker,True,3628,1356,0.426,-32.81,-0.009,-0.0214,0.0125,-1.2,-61.32,-1.29,-33.55
+2026-10-03T11:21:45,IS,baseline,logit,1.0,0.04,0.06,0,85,True,0.07,0.0,1.0,True,ticker,True,4038,1384,0.299,-94.23,-0.0233,-0.0752,0.0121,-2.99,-116.75,-3.61,-154.03
+2026-10-03T11:22:38,IS,baseline,logit,1.0,0.04,0.06,0,85,True,0.07,0.0,1.0,True,ticker,True,3817,1371,0.32,-91.87,-0.0241,-0.0726,0.0122,-3.21,-111.36,-3.59,-145.4

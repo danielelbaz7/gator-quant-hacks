@@ -19,7 +19,7 @@ import pandas as pd
 
 import config
 from backtest import breakdown, metrics, run_backtest
-from data import build_canonical, candle_snapshots, load_canonical, training_snapshots
+from data import build_canonical, candle_snapshots, load_canonical, load_live_events, training_snapshots
 from model import WinProbModel, calibration, evaluate
 
 pd.set_option("display.width", 160)
@@ -55,10 +55,10 @@ def fit_model(matches, events, kalshi_start, fset, kind, C, val=True):
 _CANDLE_CACHE = {}
 
 
-def kalshi_frame(candles, matches, events):
+def kalshi_frame(candles, matches, events, data_dir=None):
     if "c" not in _CANDLE_CACHE:
         print("computing match state for every candle...")
-        _CANDLE_CACHE["c"] = candle_snapshots(candles, matches, events)
+        _CANDLE_CACHE["c"] = candle_snapshots(candles, matches, events, load_live_events(data_dir))
     return _CANDLE_CACHE["c"]
 
 
@@ -141,7 +141,7 @@ def main():
         save_model(model, a, kstart)
         return
 
-    c = kalshi_frame(candles, matches, events)
+    c = kalshi_frame(candles, matches, events, a.data)
     is_c, oos_c = c[c.date < oos_start], c[c.date >= oos_start]
 
     if a.cmd == "backtest":
