@@ -258,7 +258,7 @@ def load_espn(matches, games_path="espn_games.parquet", events_path="espn_events
     only kept for matches where ESPN's goals reproduce the Transfermarkt final score."""
     if not (os.path.exists(games_path) and os.path.exists(events_path)):
         print("  [espn] no ESPN files (python download_espn.py); using fixed clock mapping")
-        return None, None
+        return None, None, set()
     g = pd.read_parquet(games_path)
     ev = pd.read_parquet(events_path)
     ev["t"] = pd.to_datetime(ev.wallclock, utc=True)
@@ -289,7 +289,72 @@ def load_espn(matches, games_path="espn_games.parquet", events_path="espn_events
     print(f"  [espn] goal times reproduce the final score for {ok.mean():.1%} of matched games "
           f"({(~ok).sum()} fall back to Transfermarkt minutes)")
     live = e[e.match_id.isin(good)][["match_id", "t", "side", "kind"]].reset_index(drop=True)
-    return tim.reset_index(drop=True), live
+    return tim.reset_index(drop=True), live, good
+
+
+# --------------------------------------------------------------------------- ESPN shots -> simple xG
+SHOT_TYPES = {"shot-off-target", "shot-blocked", "shot-on-target", "shot-hit-woodwork",
+              "penalty---scored", "penalty---saved", "penalty---missed", "penalty---hit-woodwork"}
+SHOT_LOC = [("pen", "penalty"), ("fk", "free kick"), ("close", "very close range|six yard"),
+            ("outside", "outside the box|long range|more than 35 yards|40 yards"),
+            ("side", "left side of the box|right side of the box|difficult angle"),
+            ("centre", "centre of the box")]
+
+
+def _shot_category(s):
+    t = s.text.str.lower()
+    loc = pd.Series("other", index=s.index)
+    for k, pat in SHOT_LOC:
+        loc[(loc == "other") & t.str.contains(pat)] = k
+    loc[s.play_type.str.startswith("penalty---")] = "pen"
+    head = t.str.contains("header") & ~loc.isin(["pen", "fk"])
+    return loc + np.where(head, "_head", "")
+
+
+def load_espn_shots(matches, path="espn_shots.parquet"):
+    """ESPN commentary shots -> events (kind='shot', xg) on Transfermarkt minutes, plus UTC-timed
+    shots for live state. xG per shot = goal rate of its category (location x header) estimated
+    only on matches before SPLIT['val_start'], so validation and Kalshi periods stay untouched."""
+    if not os.path.exists(path):
+        print("  [shots] no espn_shots.parquet (python download_espn_shots.py); xG features unavailable")
+        return None
+    s = pd.read_parquet(path)
+    ok = s.play_type.isin(SHOT_TYPES) | (s.play_type.str.startswith("goal") & (s.play_type != "goal---own-goal")) \
+        | ((s.play_type.fillna("") == "") & s.text.fillna("").str.startswith(("Attempt", "Goal!")))
+    s = s[ok & s.minute.notna()].copy()
+    s["goal"] = s.play_type.str.startswith(("goal", "penalty---scored")) | s.text.str.startswith("Goal!")
+    s["cat"] = _shot_category(s)
+
+    g = s.drop_duplicates("espn_id")[["espn_id", "league", "scheduled", "home", "away"]].copy()
+    g["key"] = g.espn_id
+    g["date"] = pd.to_datetime(g.scheduled, utc=True).dt.tz_convert(None).dt.normalize()
+    right = matches.rename(columns={"match_id": "key"})[["key", "league", "date", "home", "away"]]
+    link = match_games(g, right, allow_swap=False)
+    s["match_id"] = s.espn_id.map(lambda k: link.get(k, (None,))[0])
+    s = s.dropna(subset=["match_id"])
+    s["side"] = np.where(s.team == s.home, "home", np.where(s.team == s.away, "away", None))
+    s = s.dropna(subset=["side"])
+
+    d = matches.set_index("match_id").date
+    fit = s[pd.to_datetime(d.loc[s.match_id].to_numpy()) < pd.Timestamp(SPLIT["val_start"])]
+    table = fit.groupby("cat").goal.mean()
+    s["xg"] = s.cat.map(table).fillna(fit.goal.mean())
+    print(f"  [shots] {len(s)} shots in {s.match_id.nunique()} matches; xG by category "
+          f"(fit on {fit.match_id.nunique()} pre-validation matches): {table.round(3).to_dict()}")
+    events = s.assign(kind="shot")[["match_id", "minute", "side", "kind", "xg"]]
+    return events, s
+
+
+def live_shots(s, timing):
+    """UTC time of each shot for matches with real ESPN timings: wallclock if present, else
+    kickoff / 2nd-half start + displayed match clock."""
+    s = s[s.match_id.isin(timing.index)].copy()
+    tm = timing.loc[s.match_id]
+    clock = pd.to_timedelta(pd.to_numeric(s.clock_s, errors="coerce").to_numpy(), unit="s")
+    est = np.where(s.period.to_numpy() == 2, tm.h2_start.to_numpy() + clock - pd.Timedelta(minutes=45),
+                   tm.kickoff.to_numpy() + clock)
+    s["t"] = pd.to_datetime(s.wallclock, utc=True).fillna(pd.Series(pd.to_datetime(est, utc=True), index=s.index))
+    return s.dropna(subset=["t"])[["match_id", "t", "side"]].assign(kind="shot", xg=s.xg)
 
 
 # --------------------------------------------------------------------------- Kalshi
@@ -386,6 +451,11 @@ def build_canonical():
         events = pd.concat([events, shots])
         print(f"  xG shots attached for {shots.match_id.nunique()} matches")
 
+    print("loading ESPN shots...")
+    es = load_espn_shots(m)
+    if es is not None:
+        events = pd.concat([events, es[0]], ignore_index=True)
+
     print("loading Kalshi...")
     candles = load_kalshi(m)
     # kickoff: football-data time if present, else market close minus a fixed duration
@@ -404,7 +474,7 @@ def build_canonical():
     kick = kick.fillna(fallback)
 
     print("loading ESPN timelines...")
-    tim, live = load_espn(m)
+    tim, live, good = load_espn(m)
     if tim is not None:
         tim = tim.set_index("match_id").reindex(close.index)
         real = tim.ko_real.notna() & tim.h2_start.notna()
@@ -418,6 +488,11 @@ def build_canonical():
     if tim is not None:
         m = m.merge(tim[["ht_start", "h2_start", "ft_time"]].where(real), left_on="match_id",
                     right_index=True, how="left")
+        if es is not None:
+            timing = m.set_index("match_id").loc[lambda x: x.index.isin(good) & x.h2_start.notna()]
+            ls = live_shots(es[1], timing)
+            live = pd.concat([live.assign(xg=np.nan), ls], ignore_index=True)
+            print(f"  [shots] live shot times for {ls.match_id.nunique()} Kalshi matches")
         live.to_parquet(f"{PATHS['canonical']}/live_events.parquet")
     print(f"  kickoff sources: {pd.Series(src).value_counts().to_dict()}")
 
@@ -477,7 +552,8 @@ def state_at(idx, match_ids, cutoffs):
             if d["has_xg"]:
                 mins, cum = d[(side, "xg")]
                 k = np.searchsorted(mins, q, side="right")
-                out[f"{side}_xg"][rows] = np.where(k > 0, cum[np.maximum(k - 1, 0)], 0.0)
+                out[f"{side}_xg"][rows] = (np.where(k > 0, cum[np.maximum(k - 1, 0)], 0.0)
+                                           if len(cum) else 0.0)          # side with no shots
     return pd.DataFrame(out)
 
 
@@ -539,7 +615,9 @@ def candle_snapshots(candles, matches, events, live_events=None):
     if live_events is not None and len(live_events):
         epoch = pd.Timestamp("1970-01-01", tz="UTC")                                  # unit-safe epoch minutes
         ep = lambda x: (pd.to_datetime(x, utc=True) - epoch).dt.total_seconds().to_numpy() / 60
-        live = live_events.assign(minute=ep(live_events.t), xg=np.nan)
+        live = live_events.assign(minute=ep(live_events.t))
+        if "xg" not in live:
+            live["xg"] = np.nan
         use = c.match_id.isin(set(live.match_id)).to_numpy()
         st_live = state_at(_index_events(live), c.match_id, ep(c.t) - TIME["event_lag"])
         st.loc[use, :] = st_live.loc[use, :].to_numpy()

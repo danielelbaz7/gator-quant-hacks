@@ -1,0 +1,22 @@
+{
+ "saved": "2026-10-03T11:54:22",
+ "feature_set": "baseline_xg",
+ "kind": "logit",
+ "C": 1.0,
+ "features": [
+  "goal_diff",
+  "gd_x_elapsed",
+  "gd_over_sqrt_left",
+  "level_x_elapsed",
+  "elapsed",
+  "red_diff",
+  "red_diff_x_left",
+  "pre_logit_ha",
+  "pre_logit_x_left",
+  "pre_logit_draw",
+  "xg_diff",
+  "xg_diff_x_left"
+ ],
+ "n_train_rows": 296742,
+ "trained_on_matches_before": "2025-05-11"
+}
